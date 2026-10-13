@@ -33,7 +33,6 @@
         <button onclick="login()">登录</button>
         <div id="loginTip" class="tip"></div>
     </div>
-
     <!-- 主系统页面 -->
     <div id="mainPage" class="hidden">
         <div class="nav">
@@ -48,7 +47,6 @@
             <button id="adminMenu" class="hidden" onclick="showPanel('adminPanel')">管理员面板</button>
             <button id="exportBtn" class="hidden" onclick="exportExcel()">导出Excel报表</button>
         </div>
-
         <!-- 物资列表 -->
         <div id="goodsList" class="panel card">
             <h3>物资列表</h3>
@@ -57,7 +55,6 @@
                 <tbody id="goodsTableBody"></tbody>
             </table>
         </div>
-
         <!-- 流转申请 -->
         <div id="flowApply" class="panel card hidden">
             <h3>发起流转申请</h3>
@@ -73,7 +70,6 @@
             <button onclick="submitApply()" class="success">提交申请</button>
             <div id="applyTip" class="tip"></div>
         </div>
-
         <!-- 流转记录 -->
         <div id="flowRecord" class="panel card hidden">
             <h3>流转历史记录</h3>
@@ -82,7 +78,6 @@
                 <tbody id="recordBody"></tbody>
             </table>
         </div>
-
         <!-- 管理员面板 -->
         <div id="adminPanel" class="panel card hidden">
             <h3>管理员操作面板</h3>
@@ -97,21 +92,20 @@
             <button onclick="setRecycle()">报失/报废</button>
             <button onclick="recycleRestore()">复原物资</button>
             <hr>
-            <h4>审核申请</h4>
+            <h4>审核申请（模拟）</h4>
             <button onclick="adminConfirm()">管理员代确认流转</button>
             <button onclick="auditPass()">审核通过申领/归还</button>
             <button onclick="auditReject()">驳回申领/归还</button>
         </div>
     </div>
 </div>
-
 <script>
-// ===================== 【这里替换为你的Supabase信息！】=====================
+// ===================== 【已填入你的Supabase信息】=====================
 const SUPABASE_URL = "https://brvirrexwaulvnddgaxd.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_xCmk41YQebX2e1SGgXlMlQ_Isom7FoR";
 // ========================================================================
 const { createClient } = supabase;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let currentLoginUser = null;
 
@@ -121,22 +115,26 @@ async function login(){
     const pwd = document.getElementById("pwd").value.trim();
     const tip = document.getElementById("loginTip");
     tip.innerText="";
-    const {data,error}=await supabase.from("user").select("*").eq("username",uname).eq("password_hash",pwd).single();
-    if(error || !data){
-        tip.innerText="用户名或密码错误";
-        return;
+    try{
+        const {data,error}=await sb.from("user").select("*").eq("username",uname).eq("password_hash",pwd).single();
+        if(error || !data){
+            tip.innerText="用户名或密码错误";
+            return;
+        }
+        currentLoginUser = data;
+        document.getElementById("loginPage").classList.add("hidden");
+        document.getElementById("mainPage").classList.remove("hidden");
+        document.getElementById("curUser").innerText = data.username;
+        document.getElementById("curRole").innerText = data.role===1?"管理员":"普通用户";
+        if(data.role === 1){
+            document.getElementById("adminMenu").classList.remove("hidden");
+            document.getElementById("exportBtn").classList.remove("hidden");
+        }
+        await refreshGoodsTable();
+        await refreshRecordTable();
+    }catch(e){
+        tip.innerText="网络异常："+e.message;
     }
-    currentLoginUser = data;
-    document.getElementById("loginPage").classList.add("hidden");
-    document.getElementById("mainPage").classList.remove("hidden");
-    document.getElementById("curUser").innerText = data.username;
-    document.getElementById("curRole").innerText = data.role===1?"管理员":"普通用户";
-    if(data.role === 1){
-        document.getElementById("adminMenu").classList.remove("hidden");
-        document.getElementById("exportBtn").classList.remove("hidden");
-    }
-    await refreshGoodsTable();
-    await refreshRecordTable();
 }
 
 // 退出
@@ -150,15 +148,16 @@ function logout(){
 function showPanel(panelId){
     document.querySelectorAll(".panel").forEach(p=>p.classList.add("hidden"));
     document.getElementById(panelId).classList.remove("hidden");
-    refreshGoodsTable();
+    if(currentLoginUser) refreshGoodsTable();
 }
 
 // 刷新物资列表
 async function refreshGoodsTable(){
+    if(!currentLoginUser) return;
     const tbody = document.getElementById("goodsTableBody");
     tbody.innerHTML = "";
-    let {data:goodsList,error} = await supabase.from("goods").select("*");
-    if(error){alert("读取物资失败"+error.message);return;}
+    let {data:goodsList,error} = await sb.from("goods").select("*");
+    if(error){alert("读取物资失败："+error.message);return;}
     // 普通用户只看归属自己的物资
     if(currentLoginUser.role ===0){
         goodsList = goodsList.filter(g=>g.current_location == currentLoginUser.id);
@@ -179,10 +178,11 @@ async function refreshGoodsTable(){
 
 // 刷新流转记录
 async function refreshRecordTable(){
+    if(!currentLoginUser) return;
     const tbody = document.getElementById("recordBody");
     tbody.innerHTML = "";
-    const {data:records,error}=await supabase.from("flow_record").select("*").order("create_time",{ascending:false});
-    if(error){alert("读取流转记录失败");return;}
+    const {data:records,error}=await sb.from("flow_record").select("*").order("create_time",{ascending:false});
+    if(error){alert("读取流转记录失败："+error.message);return;}
     records.forEach(r=>{
         const tr = document.createElement("tr");
         tr.innerHTML = `
@@ -205,54 +205,60 @@ async function submitApply(){
     const targetUid = document.getElementById("targetUserId").value;
     const tip = document.getElementById("applyTip");
     tip.innerText="";
-    const {data:good,error}=await supabase.from("goods").select("*").eq("id",gid).single();
-    if(error || !good){tip.innerText="物资不存在";return;}
-    if(good.is_recycle ===1){tip.innerText="物资在回收站，不可发起申请";return;}
-    // 校验：该物资是否存在待确认申请
-    const {data:existFlow} = await supabase.from("flow_record").select("*").eq("goods_id",gid).eq("status","待接收确认");
-    if(existFlow.length>0){tip.innerText="该物资已有待确认流转申请";return;}
+    try{
+        const {data:good,error}=await sb.from("goods").select("*").eq("id",gid).single();
+        if(error || !good){tip.innerText="物资不存在";return;}
+        if(good.is_recycle ===1){tip.innerText="物资在回收站，不可发起申请";return;}
 
-    const operType = type=="userTransfer"?"用户互转":type=="getWarehouse"?"申领仓库":"归还仓库";
-    const expireTime = new Date(Date.now() + 24*60*60*1000).toISOString();
-    const insertData = {
-        goods_id:gid,
-        oper_type:operType,
-        status:"待接收确认",
-        applicant_id:currentLoginUser.id,
-        target_id:targetUid,
-        oper_user_id:currentLoginUser.id,
-        expire_time:expireTime,
-        record_detail:`${currentLoginUser.username}发起${operType}申请`
+        // 校验：该物资是否存在待确认申请
+        const {data:existFlow,errFlow}=await sb.from("flow_record").select("*").eq("goods_id",gid).eq("status","待接收确认");
+        if(errFlow) {tip.innerText="校验失败";return;}
+        if(existFlow && existFlow.length>0){tip.innerText="该物资已有待确认流转申请";return;}
+
+        const operType = type=="userTransfer"?"用户互转":type=="getWarehouse"?"申领仓库":"归还仓库";
+        const expireTime = new Date(Date.now() + 24*60*60*1000).toISOString();
+        const insertData = {
+            goods_id:gid,
+            oper_type:operType,
+            status:"待接收确认",
+            applicant_id:currentLoginUser.id,
+            target_id:targetUid,
+            oper_user_id:currentLoginUser.id,
+            expire_time:expireTime,
+            record_detail:`${currentLoginUser.username}发起${operType}申请`
+        }
+        const {error:insertErr} = await sb.from("flow_record").insert([insertData]);
+        if(insertErr){tip.innerText="提交失败："+insertErr.message;return;}
+        tip.innerText="✅申请提交成功，有效期24小时";
+        await refreshRecordTable();
+    }catch(e){
+        tip.innerText="异常："+e.message;
     }
-    const {error:insertErr} = await supabase.from("flow_record").insert([insertData]);
-    if(insertErr){tip.innerText="提交失败："+insertErr.message;return;}
-    tip.innerText="✅申请提交成功，有效期24小时";
-    await refreshRecordTable();
 }
 
 // ============管理员接口============
 async function addGoods(){
     const name = document.getElementById("addGoodsName").value;
     const attr = document.getElementById("addGoodsAttr").value;
-    const {error}=await supabase.from("goods").insert([{
+    const {error}=await sb.from("goods").insert([{
         name:name,attr:attr,current_location:"warehouse",last_flow:"管理员新增物资",is_recycle:0
     }]);
-    if(error){alert("新增失败");return;}
+    if(error){alert("新增失败："+error.message);return;}
     alert("新增物资成功");
     await refreshGoodsTable();
 }
 
 async function forceTransfer(){
     const gid = parseInt(document.getElementById("opGoodsId").value);
-    const {data:g,error}=await supabase.from("goods").select("*").eq("id",gid).single();
+    const {data:g,error}=await sb.from("goods").select("*").eq("id",gid).single();
     if(error || !g){alert("物资不存在");return;}
     // 更新物资位置
-    await supabase.from("goods").update({
+    await sb.from("goods").update({
         current_location:"warehouse",
         last_flow:`管理员强制调拨 ${new Date().toLocaleString()}`
     }).eq("id",gid);
     // 写入流转记录
-    await supabase.from("flow_record").insert([{
+    await sb.from("flow_record").insert([{
         goods_id:gid,oper_type:"强制调拨",status:"已同意",
         applicant_id:null,target_id:"warehouse",oper_user_id:currentLoginUser.id,
         record_detail:"管理员强制调拨物资入仓库"
@@ -263,10 +269,10 @@ async function forceTransfer(){
 
 async function setRecycle(){
     const gid = parseInt(document.getElementById("opGoodsId").value);
-    const {data:g,error}=await supabase.from("goods").select("*").eq("id",gid).single();
+    const {data:g,error}=await sb.from("goods").select("*").eq("id",gid).single();
     if(error || !g){alert("物资不存在");return;}
-    await supabase.from("goods").update({is_recycle:1,last_flow:`报失报废 ${new Date().toLocaleString()}`}).eq("id",gid);
-    await supabase.from("flow_record").insert([{
+    await sb.from("goods").update({is_recycle:1,last_flow:`报失报废 ${new Date().toLocaleString()}`}).eq("id",gid);
+    await sb.from("flow_record").insert([{
         goods_id:gid,oper_type:"报失报废",status:"已同意",applicant_id:null,
         oper_user_id:currentLoginUser.id,record_detail:"管理员标记物资报失报废"
     }]);
@@ -276,10 +282,10 @@ async function setRecycle(){
 
 async function recycleRestore(){
     const gid = parseInt(document.getElementById("opGoodsId").value);
-    const {data:g,error}=await supabase.from("goods").select("*").eq("id",gid).single();
+    const {data:g,error}=await sb.from("goods").select("*").eq("id",gid).single();
     if(error || !g){alert("物资不存在");return;}
-    await supabase.from("goods").update({is_recycle:0,current_location:"warehouse",last_flow:`复原物资 ${new Date().toLocaleString()}`}).eq("id",gid);
-    await supabase.from("flow_record").insert([{
+    await sb.from("goods").update({is_recycle:0,current_location:"warehouse",last_flow:`复原物资 ${new Date().toLocaleString()}`}).eq("id",gid);
+    await sb.from("flow_record").insert([{
         goods_id:gid,oper_type:"复原",status:"已同意",applicant_id:null,
         oper_user_id:currentLoginUser.id,record_detail:"管理员复原物资至仓库"
     }]);
@@ -287,9 +293,9 @@ async function recycleRestore(){
     await refreshGoodsTable();await refreshRecordTable();
 }
 
-function adminConfirm(){alert("模拟管理员代接收方确认流转");}
-function auditPass(){alert("模拟审核通过申领/归还");}
-function auditReject(){alert("模拟驳回申领/归还");}
+function adminConfirm(){alert("模拟管理员代接收方确认流转（尚未实现数据库逻辑）");}
+function auditPass(){alert("模拟审核通过申领/归还（尚未实现数据库逻辑）");}
+function auditReject(){alert("模拟驳回申领/归还（尚未实现数据库逻辑）");}
 function exportExcel(){alert("模拟导出Excel");}
 </script>
 </body>
