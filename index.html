@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物资管理系统 Supabase版</title>
+    <!-- Supabase JS SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * {box-sizing: border-box; font-family: "Microsoft Yahei", sans-serif;margin:0;padding:0;}
+        body {padding:12px;max-width:1200px;margin:0 auto;}
+        .hidden {display: none;}
+        .card {border:1px solid #ccc; padding:16px; border-radius:8px; margin-bottom:12px;}
+        table {width:100%; border-collapse: collapse; margin:10px 0; font-size:14px;}
+        th,td {border:1px solid #aaa; padding:8px; text-align:center;}
+        th {background:#f2f2f2;}
+        button {padding:7px 10px; cursor:pointer; margin:3px; border:none; background:#2563eb;color:#fff;border-radius:4px;}
+        button.danger {background:#dc2626;}
+        button.success {background:#16a34a;}
+        input, select {padding:7px; width:100%;max-width:300px; margin:4px 0;}
+        .nav {background:#333; padding:12px; color:white; border-radius:6px;margin-bottom:15px;}
+        .tip {margin:8px 0;color:red;}
+    </style>
+</head>
+<body>
+<div>
+    <!-- 登录页 -->
+    <div id="loginPage" class="card">
+        <h2>物资管理系统 - 登录</h2>
+        <div>用户名：<input id="username" type="text"></div>
+        <div>密码：<input id="pwd" type="password"></div>
+        <br>
+        <button onclick="login()">登录</button>
+        <div id="loginTip" class="tip"></div>
+    </div>
+
+    <!-- 主系统页面 -->
+    <div id="mainPage" class="hidden">
+        <div class="nav">
+            <span>当前用户：<b id="curUser"></b></span>
+            <span>角色：<b id="curRole"></b></span>
+            <button onclick="logout()" style="float:right" class="danger">退出登录</button>
+        </div>
+        <div>
+            <button onclick="showPanel('goodsList')">物资列表</button>
+            <button onclick="showPanel('flowApply')">流转申请</button>
+            <button onclick="showPanel('flowRecord')">流转记录</button>
+            <button id="adminMenu" class="hidden" onclick="showPanel('adminPanel')">管理员面板</button>
+            <button id="exportBtn" class="hidden" onclick="exportExcel()">导出Excel报表</button>
+        </div>
+
+        <!-- 物资列表 -->
+        <div id="goodsList" class="panel card">
+            <h3>物资列表</h3>
+            <table>
+                <tr><th>物资ID</th><th>名称</th><th>属性</th><th>当前位置</th><th>回收站</th><th>最近流转</th></tr>
+                <tbody id="goodsTableBody"></tbody>
+            </table>
+        </div>
+
+        <!-- 流转申请 -->
+        <div id="flowApply" class="panel card hidden">
+            <h3>发起流转申请</h3>
+            <div>物资ID：<input id="applyGoodsId" type="number" placeholder="物资ID"></div>
+            <div>申请类型：
+                <select id="applyType">
+                    <option value="userTransfer">用户间移交</option>
+                    <option value="getWarehouse">仓库申领</option>
+                    <option value="backWarehouse">归还仓库</option>
+                </select>
+            </div>
+            <div>目标用户ID：<input id="targetUserId" type="number" placeholder="目标用户ID"></div>
+            <button onclick="submitApply()" class="success">提交申请</button>
+            <div id="applyTip" class="tip"></div>
+        </div>
+
+        <!-- 流转记录 -->
+        <div id="flowRecord" class="panel card hidden">
+            <h3>流转历史记录</h3>
+            <table>
+                <tr><th>记录ID</th><th>物资ID</th><th>操作类型</th><th>状态</th><th>申请人</th><th>操作人</th><th>时间</th></tr>
+                <tbody id="recordBody"></tbody>
+            </table>
+        </div>
+
+        <!-- 管理员面板 -->
+        <div id="adminPanel" class="panel card hidden">
+            <h3>管理员操作面板</h3>
+            <h4>新增物资</h4>
+            <div>名称<input id="addGoodsName"></div>
+            <div>属性<input id="addGoodsAttr"></div>
+            <button onclick="addGoods()" class="success">新增物资</button>
+            <hr>
+            <h4>物资操作</h4>
+            <div>物资ID<input id="opGoodsId"></div>
+            <button onclick="forceTransfer()">强制调拨</button>
+            <button onclick="setRecycle()">报失/报废</button>
+            <button onclick="recycleRestore()">复原物资</button>
+            <hr>
+            <h4>审核申请</h4>
+            <button onclick="adminConfirm()">管理员代确认流转</button>
+            <button onclick="auditPass()">审核通过申领/归还</button>
+            <button onclick="auditReject()">驳回申领/归还</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ===================== 【这里替换为你的Supabase信息！】=====================
+const SUPABASE_URL = "替换为你的SUPABASE_URL";
+const SUPABASE_ANON_KEY = "替换为你的ANON_KEY";
+// ========================================================================
+const { createClient } = supabase;
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let currentLoginUser = null;
+
+// 登录
+async function login(){
+    const uname = document.getElementById("username").value.trim();
+    const pwd = document.getElementById("pwd").value.trim();
+    const tip = document.getElementById("loginTip");
+    tip.innerText="";
+    const {data,error}=await supabase.from("user").select("*").eq("username",uname).eq("password_hash",pwd).single();
+    if(error || !data){
+        tip.innerText="用户名或密码错误";
+        return;
+    }
+    currentLoginUser = data;
+    document.getElementById("loginPage").classList.add("hidden");
+    document.getElementById("mainPage").classList.remove("hidden");
+    document.getElementById("curUser").innerText = data.username;
+    document.getElementById("curRole").innerText = data.role===1?"管理员":"普通用户";
+    if(data.role === 1){
+        document.getElementById("adminMenu").classList.remove("hidden");
+        document.getElementById("exportBtn").classList.remove("hidden");
+    }
+    await refreshGoodsTable();
+    await refreshRecordTable();
+}
+
+// 退出
+function logout(){
+    currentLoginUser=null;
+    document.getElementById("mainPage").classList.add("hidden");
+    document.getElementById("loginPage").classList.remove("hidden");
+}
+
+// 切换面板
+function showPanel(panelId){
+    document.querySelectorAll(".panel").forEach(p=>p.classList.add("hidden"));
+    document.getElementById(panelId).classList.remove("hidden");
+    refreshGoodsTable();
+}
+
+// 刷新物资列表
+async function refreshGoodsTable(){
+    const tbody = document.getElementById("goodsTableBody");
+    tbody.innerHTML = "";
+    let {data:goodsList,error} = await supabase.from("goods").select("*");
+    if(error){alert("读取物资失败"+error.message);return;}
+    // 普通用户只看归属自己的物资
+    if(currentLoginUser.role ===0){
+        goodsList = goodsList.filter(g=>g.current_location == currentLoginUser.id);
+    }
+    goodsList.forEach(g=>{
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>${g.id}</td>
+            <td>${g.name}</td>
+            <td>${g.attr}</td>
+            <td>${g.current_location == "warehouse" ? "仓库" : "用户ID:"+g.current_location}</td>
+            <td>${g.is_recycle?"✅回收站":"正常"}</td>
+            <td>${g.last_flow}</td>
+        `
+        tbody.appendChild(tr);
+    })
+}
+
+// 刷新流转记录
+async function refreshRecordTable(){
+    const tbody = document.getElementById("recordBody");
+    tbody.innerHTML = "";
+    const {data:records,error}=await supabase.from("flow_record").select("*").order("create_time",{ascending:false});
+    if(error){alert("读取流转记录失败");return;}
+    records.forEach(r=>{
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>${r.id}</td>
+            <td>${r.goods_id}</td>
+            <td>${r.oper_type}</td>
+            <td>${r.status}</td>
+            <td>${r.applicant_id||""}</td>
+            <td>${r.oper_user_id}</td>
+            <td>${new Date(r.create_time).toLocaleString()}</td>
+        `
+        tbody.appendChild(tr);
+    })
+}
+
+// 提交流转申请
+async function submitApply(){
+    const gid = parseInt(document.getElementById("applyGoodsId").value);
+    const type = document.getElementById("applyType").value;
+    const targetUid = document.getElementById("targetUserId").value;
+    const tip = document.getElementById("applyTip");
+    tip.innerText="";
+    const {data:good,error}=await supabase.from("goods").select("*").eq("id",gid).single();
+    if(error || !good){tip.innerText="物资不存在";return;}
+    if(good.is_recycle ===1){tip.innerText="物资在回收站，不可发起申请";return;}
+    // 校验：该物资是否存在待确认申请
+    const {data:existFlow} = await supabase.from("flow_record").select("*").eq("goods_id",gid).eq("status","待接收确认");
+    if(existFlow.length>0){tip.innerText="该物资已有待确认流转申请";return;}
+
+    const operType = type=="userTransfer"?"用户互转":type=="getWarehouse"?"申领仓库":"归还仓库";
+    const expireTime = new Date(Date.now() + 24*60*60*1000).toISOString();
+    const insertData = {
+        goods_id:gid,
+        oper_type:operType,
+        status:"待接收确认",
+        applicant_id:currentLoginUser.id,
+        target_id:targetUid,
+        oper_user_id:currentLoginUser.id,
+        expire_time:expireTime,
+        record_detail:`${currentLoginUser.username}发起${operType}申请`
+    }
+    const {error:insertErr} = await supabase.from("flow_record").insert([insertData]);
+    if(insertErr){tip.innerText="提交失败："+insertErr.message;return;}
+    tip.innerText="✅申请提交成功，有效期24小时";
+    await refreshRecordTable();
+}
+
+// ============管理员接口============
+async function addGoods(){
+    const name = document.getElementById("addGoodsName").value;
+    const attr = document.getElementById("addGoodsAttr").value;
+    const {error}=await supabase.from("goods").insert([{
+        name:name,attr:attr,current_location:"warehouse",last_flow:"管理员新增物资",is_recycle:0
+    }]);
+    if(error){alert("新增失败");return;}
+    alert("新增物资成功");
+    await refreshGoodsTable();
+}
+
+async function forceTransfer(){
+    const gid = parseInt(document.getElementById("opGoodsId").value);
+    const {data:g,error}=await supabase.from("goods").select("*").eq("id",gid).single();
+    if(error || !g){alert("物资不存在");return;}
+    // 更新物资位置
+    await supabase.from("goods").update({
+        current_location:"warehouse",
+        last_flow:`管理员强制调拨 ${new Date().toLocaleString()}`
+    }).eq("id",gid);
+    // 写入流转记录
+    await supabase.from("flow_record").insert([{
+        goods_id:gid,oper_type:"强制调拨",status:"已同意",
+        applicant_id:null,target_id:"warehouse",oper_user_id:currentLoginUser.id,
+        record_detail:"管理员强制调拨物资入仓库"
+    }]);
+    alert("强制调拨完成");
+    await refreshGoodsTable();await refreshRecordTable();
+}
+
+async function setRecycle(){
+    const gid = parseInt(document.getElementById("opGoodsId").value);
+    const {data:g,error}=await supabase.from("goods").select("*").eq("id",gid).single();
+    if(error || !g){alert("物资不存在");return;}
+    await supabase.from("goods").update({is_recycle:1,last_flow:`报失报废 ${new Date().toLocaleString()}`}).eq("id",gid);
+    await supabase.from("flow_record").insert([{
+        goods_id:gid,oper_type:"报失报废",status:"已同意",applicant_id:null,
+        oper_user_id:currentLoginUser.id,record_detail:"管理员标记物资报失报废"
+    }]);
+    alert("物资进入回收站");
+    await refreshGoodsTable();await refreshRecordTable();
+}
+
+async function recycleRestore(){
+    const gid = parseInt(document.getElementById("opGoodsId").value);
+    const {data:g,error}=await supabase.from("goods").select("*").eq("id",gid).single();
+    if(error || !g){alert("物资不存在");return;}
+    await supabase.from("goods").update({is_recycle:0,current_location:"warehouse",last_flow:`复原物资 ${new Date().toLocaleString()}`}).eq("id",gid);
+    await supabase.from("flow_record").insert([{
+        goods_id:gid,oper_type:"复原",status:"已同意",applicant_id:null,
+        oper_user_id:currentLoginUser.id,record_detail:"管理员复原物资至仓库"
+    }]);
+    alert("物资复原成功");
+    await refreshGoodsTable();await refreshRecordTable();
+}
+
+function adminConfirm(){alert("模拟管理员代接收方确认流转");}
+function auditPass(){alert("模拟审核通过申领/归还");}
+function auditReject(){alert("模拟驳回申领/归还");}
+function exportExcel(){alert("模拟导出Excel");}
+</script>
+</body>
+</html>
