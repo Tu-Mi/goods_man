@@ -42,11 +42,13 @@
         </div>
         <div>
             <button onclick="showPanel('goodsList')">物资列表</button>
-            <button onclick="showPanel('flowApply')">流转申请</button>
+            <button onclick="showPanel('flowApply')">发起流转申请</button>
+            <button onclick="showPanel('flowOperate')">流转操作(同意/拒绝/撤回)</button>
             <button onclick="showPanel('flowRecord')">流转记录</button>
             <button id="adminMenu" class="hidden" onclick="showPanel('adminPanel')">管理员面板</button>
             <button id="exportBtn" class="hidden" onclick="exportExcel()">导出Excel报表</button>
         </div>
+
         <!-- 物资列表 -->
         <div id="goodsList" class="panel card">
             <h3>物资列表</h3>
@@ -55,7 +57,8 @@
                 <tbody id="goodsTableBody"></tbody>
             </table>
         </div>
-        <!-- 流转申请 -->
+
+        <!-- 发起流转申请 -->
         <div id="flowApply" class="panel card hidden">
             <h3>发起流转申请</h3>
             <div>物资ID：<input id="applyGoodsId" type="number" placeholder="物资ID"></div>
@@ -70,6 +73,17 @@
             <button onclick="submitApply()" class="success">提交申请</button>
             <div id="applyTip" class="tip"></div>
         </div>
+
+        <!-- 普通用户流转操作：同意 / 拒绝 / 撤回 -->
+        <div id="flowOperate" class="panel card hidden">
+            <h3>流转申请操作（填写流转记录ID）</h3>
+            <div>流转记录ID：<input id="userFlowRecordId" type="number" placeholder="流转记录ID"></div>
+            <p>仅用于【用户互转】申请</p>
+            <button onclick="acceptTransfer()" class="success">接收方同意</button>
+            <button onclick="rejectTransfer()" class="danger">接收方拒绝</button>
+            <button onclick="cancelApply()">申请人撤回申请</button>
+        </div>
+
         <!-- 流转记录 -->
         <div id="flowRecord" class="panel card hidden">
             <h3>流转历史记录</h3>
@@ -78,6 +92,7 @@
                 <tbody id="recordBody"></tbody>
             </table>
         </div>
+
         <!-- 管理员面板 -->
         <div id="adminPanel" class="panel card hidden">
             <h3>管理员操作面板</h3>
@@ -92,13 +107,15 @@
             <button onclick="setRecycle()">报失/报废</button>
             <button onclick="recycleRestore()">复原物资</button>
             <hr>
-            <h4>审核申请（模拟）</h4>
+            <h4>审核申请（输入流转记录ID）</h4>
+            <div>流转记录ID：<input id="flowOpRecordId" type="number" placeholder="填写待确认的flow_record ID"></div>
             <button onclick="adminConfirm()">管理员代确认流转</button>
             <button onclick="auditPass()">审核通过申领/归还</button>
             <button onclick="auditReject()">驳回申领/归还</button>
         </div>
     </div>
 </div>
+
 <script>
 // ===================== 【已填入你的Supabase信息】=====================
 const SUPABASE_URL = "https://brvirrexwaulvnddgaxd.supabase.co";
@@ -236,6 +253,94 @@ async function submitApply(){
     }
 }
 
+// ==========普通用户流转操作：接收方同意、接收方拒绝、申请人撤回==========
+/**接收方同意 用户互转申请 */
+async function acceptTransfer(){
+    const recordId = parseInt(document.getElementById("userFlowRecordId").value);
+    if(!recordId){alert("请填写流转记录ID");return;}
+    try{
+        const {data:flowRec,error:recErr}=await sb.from("flow_record")
+            .select("*")
+            .eq("id",recordId)
+            .eq("status","待接收确认")
+            .eq("oper_type","用户互转")
+            .single();
+        if(recErr||!flowRec){alert("找不到待确认的用户互转申请");return;}
+        // target_id是接收方ID，校验当前登录用户必须是接收方
+        if(String(currentLoginUser.id) !== String(flowRec.target_id)){
+            alert("只有该申请的接收方可以执行同意！");
+            return;
+        }
+        const goodsId = flowRec.goods_id;
+        const newLoc = flowRec.target_id;
+
+        await sb.from("flow_record").update({
+            status:"已同意",
+            record_detail:`接收方${currentLoginUser.username}同意用户互转申请`
+        }).eq("id",recordId);
+
+        await sb.from("goods").update({
+            current_location:newLoc,
+            last_flow:`接收方同意流转，目标用户ID${newLoc} ${new Date().toLocaleString()}`
+        }).eq("id",goodsId);
+
+        alert("✅接收方同意完成");
+        await refreshGoodsTable();await refreshRecordTable();
+    }catch(e){alert("同意异常："+e.message);}
+}
+
+/**接收方拒绝 用户互转申请 */
+async function rejectTransfer(){
+    const recordId = parseInt(document.getElementById("userFlowRecordId").value);
+    if(!recordId){alert("请填写流转记录ID");return;}
+    try{
+        const {data:flowRec,error:recErr}=await sb.from("flow_record")
+            .select("*")
+            .eq("id",recordId)
+            .eq("status","待接收确认")
+            .eq("oper_type","用户互转")
+            .single();
+        if(recErr||!flowRec){alert("找不到待确认的用户互转申请");return;}
+        if(String(currentLoginUser.id) !== String(flowRec.target_id)){
+            alert("只有该申请的接收方可以执行拒绝！");
+            return;
+        }
+        await sb.from("flow_record").update({
+            status:"接收方拒绝",
+            record_detail:`接收方${currentLoginUser.username}拒绝用户互转申请，物资位置不变`
+        }).eq("id",recordId);
+
+        alert("✅接收方已拒绝，物资位置不变");
+        await refreshGoodsTable();await refreshRecordTable();
+    }catch(e){alert("拒绝异常："+e.message);}
+}
+
+/**申请人撤回申请 */
+async function cancelApply(){
+    const recordId = parseInt(document.getElementById("userFlowRecordId").value);
+    if(!recordId){alert("请填写流转记录ID");return;}
+    try{
+        const {data:flowRec,error:recErr}=await sb.from("flow_record")
+            .select("*")
+            .eq("id",recordId)
+            .eq("status","待接收确认")
+            .single();
+        if(recErr||!flowRec){alert("找不到待确认申请");return;}
+        // 校验：只有申请人本人可以撤回
+        if(currentLoginUser.id !== flowRec.applicant_id){
+            alert("只有申请人本人可以撤回该申请！");
+            return;
+        }
+        await sb.from("flow_record").update({
+            status:"申请人撤回",
+            record_detail:`申请人${currentLoginUser.username}撤回申请，物资位置不变`
+        }).eq("id",recordId);
+
+        alert("✅申请人撤回申请完成");
+        await refreshGoodsTable();await refreshRecordTable();
+    }catch(e){alert("撤回异常："+e.message);}
+}
+
 // ============管理员接口============
 async function addGoods(){
     const name = document.getElementById("addGoodsName").value;
@@ -250,18 +355,24 @@ async function addGoods(){
 
 async function forceTransfer(){
     const gid = parseInt(document.getElementById("opGoodsId").value);
+    const targetLoc = prompt("请输入目标位置：用户ID 或 warehouse");
+    if(!targetLoc) return;
     const {data:g,error}=await sb.from("goods").select("*").eq("id",gid).single();
     if(error || !g){alert("物资不存在");return;}
-    // 更新物资位置
+    // 管理员强制调拨：作废该物资所有待确认申请
+    await sb.from("flow_record")
+        .update({status:"超时失效",record_detail:"管理员强制调拨，申请自动作废"})
+        .eq("goods_id",gid).eq("status","待接收确认");
+
     await sb.from("goods").update({
-        current_location:"warehouse",
-        last_flow:`管理员强制调拨 ${new Date().toLocaleString()}`
+        current_location:targetLoc,
+        last_flow:`管理员强制调拨至${targetLoc} ${new Date().toLocaleString()}`
     }).eq("id",gid);
-    // 写入流转记录
+
     await sb.from("flow_record").insert([{
         goods_id:gid,oper_type:"强制调拨",status:"已同意",
-        applicant_id:null,target_id:"warehouse",oper_user_id:currentLoginUser.id,
-        record_detail:"管理员强制调拨物资入仓库"
+        applicant_id:null,target_id:targetLoc,oper_user_id:currentLoginUser.id,
+        record_detail:`管理员强制调拨物资至${targetLoc}`
     }]);
     alert("强制调拨完成");
     await refreshGoodsTable();await refreshRecordTable();
@@ -293,10 +404,148 @@ async function recycleRestore(){
     await refreshGoodsTable();await refreshRecordTable();
 }
 
-function adminConfirm(){alert("模拟管理员代接收方确认流转（尚未实现数据库逻辑）");}
-function auditPass(){alert("模拟审核通过申领/归还（尚未实现数据库逻辑）");}
-function auditReject(){alert("模拟驳回申领/归还（尚未实现数据库逻辑）");}
-function exportExcel(){alert("模拟导出Excel");}
+/**管理员代接收方确认流转申请 */
+async function adminConfirm() {
+    const recordId = parseInt(document.getElementById("flowOpRecordId").value);
+    if (!recordId) {
+        alert("请输入流转记录ID");
+        return;
+    }
+    try {
+        const { data: flowRec, error: recErr } = await sb
+            .from("flow_record")
+            .select("*")
+            .eq("id", recordId)
+            .eq("status", "待接收确认")
+            .single();
+
+        if (recErr || !flowRec) {
+            alert("未找到待确认的该条流转申请");
+            return;
+        }
+        if (flowRec.oper_type !== "用户互转") {
+            alert("代确认仅支持【用户互转】类型申请，请使用审核通过");
+            return;
+        }
+        const goodsId = flowRec.goods_id;
+        const targetLoc = flowRec.target_id;
+
+        await sb.from("flow_record")
+            .update({
+                status: "管理员代确认完成",
+                record_detail: `${currentLoginUser.username}管理员代接收方确认流转申请`
+            })
+            .eq("id", recordId);
+
+        await sb.from("goods")
+            .update({
+                current_location: targetLoc,
+                last_flow: `管理员代确认流转，目标：${targetLoc} ${new Date().toLocaleString()}`
+            })
+            .eq("id", goodsId);
+
+        alert("✅管理员代确认流转完成");
+        await refreshGoodsTable();
+        await refreshRecordTable();
+    } catch (e) {
+        alert("代确认异常：" + e.message);
+    }
+}
+
+/**审核通过：申领仓库 / 归还仓库 */
+async function auditPass() {
+    const recordId = parseInt(document.getElementById("flowOpRecordId").value);
+    if (!recordId) {
+        alert("请输入流转记录ID");
+        return;
+    }
+    try {
+        const { data: flowRec, error: recErr } = await sb
+            .from("flow_record")
+            .select("*")
+            .eq("id", recordId)
+            .eq("status", "待接收确认")
+            .single();
+
+        if (recErr || !flowRec) {
+            alert("未找到待确认该条申请");
+            return;
+        }
+        const goodsId = flowRec.goods_id;
+        let newLocation;
+        if (flowRec.oper_type === "申领仓库") {
+            newLocation = flowRec.applicant_id;
+        } else if (flowRec.oper_type === "归还仓库") {
+            newLocation = "warehouse";
+        } else {
+            alert("审核通过仅支持【申领仓库 / 归还仓库】");
+            return;
+        }
+
+        await sb.from("flow_record")
+            .update({
+                status: "已同意",
+                record_detail: `${currentLoginUser.username}审核通过${flowRec.oper_type}申请`
+            })
+            .eq("id", recordId);
+
+        await sb.from("goods")
+            .update({
+                current_location: newLocation,
+                last_flow: `审核通过${flowRec.oper_type}，位置变更为${newLocation} ${new Date().toLocaleString()}`
+            })
+            .eq("id", goodsId);
+
+        alert("✅审核通过完成");
+        await refreshGoodsTable();
+        await refreshRecordTable();
+    } catch (e) {
+        alert("审核通过异常：" + e.message);
+    }
+}
+
+/**驳回申领/归还申请 */
+async function auditReject() {
+    const recordId = parseInt(document.getElementById("flowOpRecordId").value);
+    if (!recordId) {
+        alert("请输入流转记录ID");
+        return;
+    }
+    try {
+        const { data: flowRec, error: recErr } = await sb
+            .from("flow_record")
+            .select("*")
+            .eq("id", recordId)
+            .eq("status", "待接收确认")
+            .single();
+
+        if (recErr || !flowRec) {
+            alert("未找到待确认该条申请");
+            return;
+        }
+        if (!["申领仓库", "归还仓库"].includes(flowRec.oper_type)) {
+            alert("驳回仅支持【申领仓库 / 归还仓库】");
+            return;
+        }
+
+        await sb.from("flow_record")
+            .update({
+                status: "管理员驳回（申领/归还）",
+                record_detail: `${currentLoginUser.username}驳回${flowRec.oper_type}申请，物资位置保持不变`
+            })
+            .eq("id", recordId);
+
+        alert("✅已驳回申请，物资位置保持不变");
+        await refreshGoodsTable();
+        await refreshRecordTable();
+    } catch (e) {
+        alert("驳回异常：" + e.message);
+    }
+}
+
+function exportExcel(){
+    alert("模拟导出Excel");
+}
 </script>
 </body>
 </html>
